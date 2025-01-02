@@ -108,7 +108,8 @@ def config_reload_minigraph_with_rendered_golden_config_override(
 def pfcwd_feature_enabled(duthost):
     device_metadata = duthost.config_facts(host=duthost.hostname, source="running")['ansible_facts']['DEVICE_METADATA']
     pfc_status = device_metadata['localhost']["default_pfcwd_status"]
-    return pfc_status == 'enable'
+    switch_role = device_metadata['localhost'].get('type', '')
+    return pfc_status == 'enable' and switch_role not in ['MgmtToRRouter', 'BmcMgmtToRRouter']
 
 
 @ignore_loganalyzer
@@ -214,8 +215,8 @@ def config_reload(sonic_host, config_source='config_db', wait=120, start_bgp=Tru
         time.sleep(wait)
 
     if wait_for_bgp:
-        bgp_neighbors = sonic_host.get_bgp_neighbors_per_asic()
+        bgp_neighbors = sonic_host.get_bgp_neighbors_per_asic(state="all")
         pytest_assert(
-            wait_until(wait + 120, 10, 0, sonic_host.check_bgp_session_state_all_asics, bgp_neighbors),
+            wait_until(wait + 300, 10, 0, sonic_host.check_bgp_session_state_all_asics, bgp_neighbors),
             "Not all bgp sessions are established after config reload",
         )

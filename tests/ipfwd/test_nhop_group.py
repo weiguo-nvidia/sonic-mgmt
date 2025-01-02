@@ -759,6 +759,36 @@ def test_nhop_group_member_order_capability(duthost, tbinfo, ptfadapter, gather_
                          45: 'c0:ff:ee:00:00:12', 46: 'c0:ff:ee:00:00:0e', 47: 'c0:ff:ee:00:00:0f',
                          48: 'c0:ff:ee:00:00:0b', 49: 'c0:ff:ee:00:00:12'}
 
+    gr2_asic_flow_map = {0: 'c0:ff:ee:00:00:11', 1: 'c0:ff:ee:00:00:12',
+                         2: 'c0:ff:ee:00:00:0c',
+                         3: 'c0:ff:ee:00:00:0f', 4: 'c0:ff:ee:00:00:0b',
+                         5: 'c0:ff:ee:00:00:10', 6: 'c0:ff:ee:00:00:12',
+                         7: 'c0:ff:ee:00:00:12', 8: 'c0:ff:ee:00:00:0b',
+                         9: 'c0:ff:ee:00:00:0e',
+                         10: 'c0:ff:ee:00:00:10', 11: 'c0:ff:ee:00:00:0c',
+                         12: 'c0:ff:ee:00:00:0c', 13: 'c0:ff:ee:00:00:11',
+                         14: 'c0:ff:ee:00:00:0c',
+                         15: 'c0:ff:ee:00:00:0f', 16: 'c0:ff:ee:00:00:10',
+                         17: 'c0:ff:ee:00:00:0b', 18: 'c0:ff:ee:00:00:10',
+                         19: 'c0:ff:ee:00:00:0f', 20: 'c0:ff:ee:00:00:0b',
+                         21: 'c0:ff:ee:00:00:12', 22: 'c0:ff:ee:00:00:0f',
+                         23: 'c0:ff:ee:00:00:0d', 24: 'c0:ff:ee:00:00:0c',
+                         25: 'c0:ff:ee:00:00:0c',
+                         26: 'c0:ff:ee:00:00:10', 27: 'c0:ff:ee:00:00:0d',
+                         28: 'c0:ff:ee:00:00:11', 29: 'c0:ff:ee:00:00:12',
+                         30: 'c0:ff:ee:00:00:0e', 31: 'c0:ff:ee:00:00:11',
+                         32: 'c0:ff:ee:00:00:0e', 33: 'c0:ff:ee:00:00:0b',
+                         34: 'c0:ff:ee:00:00:0e',
+                         35: 'c0:ff:ee:00:00:0b', 36: 'c0:ff:ee:00:00:11',
+                         37: 'c0:ff:ee:00:00:11', 38: 'c0:ff:ee:00:00:10',
+                         39: 'c0:ff:ee:00:00:12',
+                         40: 'c0:ff:ee:00:00:11', 41: 'c0:ff:ee:00:00:0f',
+                         42: 'c0:ff:ee:00:00:11', 43: 'c0:ff:ee:00:00:0f',
+                         44: 'c0:ff:ee:00:00:0f', 45: 'c0:ff:ee:00:00:0b',
+                         46: 'c0:ff:ee:00:00:0f',
+                         47: 'c0:ff:ee:00:00:0d', 48: 'c0:ff:ee:00:00:0e',
+                         49: 'c0:ff:ee:00:00:0e'}
+
     # Make sure a given flow always hash to same nexthop/neighbor. This is done to try to find issue
     # where SAI vendor changes Hash Function across SAI releases. Please note this will not catch the issue every time
     # as there is always probability even after change of Hash Function same nexthop/neighbor is selected.
@@ -769,7 +799,7 @@ def test_nhop_group_member_order_capability(duthost, tbinfo, ptfadapter, gather_
                                               "th4": th_asic_flow_map, "td3": td3_asic_flow_map,
                                               "gr": gr_asic_flow_map, "spc1": spc_asic_flow_map,
                                               "spc2": spc_asic_flow_map, "spc3": spc_asic_flow_map,
-                                              "spc4": spc_asic_flow_map}
+                                              "spc4": spc_asic_flow_map, "gr2": gr2_asic_flow_map}
 
     vendor = duthost.facts["asic_type"]
     hostvars = duthost.host.options['variable_manager']._hostvars[duthost.hostname]
@@ -792,8 +822,8 @@ def test_nhop_group_member_order_capability(duthost, tbinfo, ptfadapter, gather_
                       "Flow {} is not picking expected Neighbor".format(flow_count))
 
 
-def test_nhop_group_interface_flap(duthost, tbinfo, ptfadapter, gather_facts,
-                                   enum_rand_one_frontend_asic_index, fanouthosts):
+def test_nhop_group_interface_flap(duthosts, enum_rand_one_per_hwsku_frontend_hostname, tbinfo, ptfadapter,
+                                   gather_facts, enum_rand_one_frontend_asic_index, fanouthosts):
     """
     Test for packet drop when route is added with ECMP and all ECMP member's
     interfaces are down. Use kernel flag 'arp_evict_nocarrier' to disable ARP
@@ -802,6 +832,7 @@ def test_nhop_group_interface_flap(duthost, tbinfo, ptfadapter, gather_facts,
     Nexthop members. Without this kernel flag, static route addition fails when
     Nexthop ARP entries are not resolved.
     """
+    duthost = duthosts[enum_rand_one_per_hwsku_frontend_hostname]
     asic = duthost.asic_instance(enum_rand_one_frontend_asic_index)
 
     # Check Gather facts IP Interface is active one
@@ -836,7 +867,7 @@ def test_nhop_group_interface_flap(duthost, tbinfo, ptfadapter, gather_facts,
 
         # Enable kernel flag to not evict ARP entries when the interface goes down
         # and shut the fanout switch ports.
-        duthost.shell(arp_noevict_cmd % gather_facts['src_router_intf_name'])
+        asic.command(arp_noevict_cmd % gather_facts['src_router_intf_name'])
         for i in range(0, len(gather_facts['src_port'])):
             fanout, fanout_port = fanout_switch_port_lookup(fanouthosts, duthost.hostname,
                                                             gather_facts['src_port'][i])
@@ -861,7 +892,7 @@ def test_nhop_group_interface_flap(duthost, tbinfo, ptfadapter, gather_facts,
                                                             gather_facts['src_port'][i])
             logger.debug("No Shut fanout sw: %s, port: %s", fanout, fanout_port)
             fanout.no_shutdown(fanout_port)
-        time.sleep(10)
+        time.sleep(20)
         duthost.shell("portstat -c")
         ptfadapter.dataplane.flush()
         testutils.send(ptfadapter, gather_facts['dst_port_ids'][0], pkt, pkt_count)
@@ -876,6 +907,6 @@ def test_nhop_group_interface_flap(duthost, tbinfo, ptfadapter, gather_facts,
         logger.info("portstats: %s", result['stdout'])
 
     finally:
-        duthost.shell(arp_evict_cmd % gather_facts['src_router_intf_name'])
+        asic.command(arp_evict_cmd % gather_facts['src_router_intf_name'])
         nhop.delete_routes()
         arplist.clean_up()

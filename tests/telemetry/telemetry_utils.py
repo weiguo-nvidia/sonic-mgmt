@@ -6,6 +6,7 @@ import re
 from pkg_resources import parse_version
 from tests.common.helpers.assertions import pytest_assert
 from tests.common.helpers.gnmi_utils import GNMIEnvironment
+from tests.common.utilities import wait_until
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,19 @@ def setup_telemetry_forpyclient(duthost):
     client_auth_out = duthost.shell('sonic-db-cli CONFIG_DB HGET "%s|gnmi" "client_auth"' % (env.gnmi_config_table),
                                     module_ignore_errors=False)['stdout_lines']
     client_auth = str(client_auth_out[0])
+
+    if client_auth == "true":
+        duthost.shell('sonic-db-cli CONFIG_DB HSET "%s|gnmi" "client_auth" "false"' % (env.gnmi_config_table),
+                      module_ignore_errors=False)
+        duthost.shell("systemctl reset-failed %s" % (env.gnmi_container))
+        duthost.service(name=env.gnmi_container, state="restarted")
+        # Wait until telemetry was restarted
+        pytest_assert(wait_until(100, 10, 0, duthost.is_service_fully_started, env.gnmi_container),
+                      "%s not started." % (env.gnmi_container))
+        logger.info("telemetry process restarted")
+    else:
+        logger.info('client auth is false. No need to restart telemetry')
+
     return client_auth
 
 
@@ -130,7 +144,7 @@ def trigger_logger(duthost, log, process, container="", priority="local0.notice"
 
 def generate_client_cli(duthost, gnxi_path, method=METHOD_GET, xpath="COUNTERS/Ethernet0", target="COUNTERS_DB",
                         subscribe_mode=SUBSCRIBE_MODE_STREAM, submode=SUBMODE_SAMPLE,
-                        intervalms=0, update_count=3, create_connections=1, filter_event_regex="",
+                        intervalms=0, update_count=3, create_connections=1, filter_event_regex="", namespace=None,
                         timeout=-1):
     """ Generate the py_gnmicli command line based on the given params.
     t                      --target: gNMI target; required
@@ -145,11 +159,15 @@ def generate_client_cli(duthost, gnxi_path, method=METHOD_GET, xpath="COUNTERS/E
     update_count:          Max number of streaming updates to receive. 0 means no limit. default 0
     create_connections:    Creates TCP connections with gNMI server; default 1; -1 for infinite connections
     filter_event_regex:    Regex to filter event when querying events path
+    namespace:             namespace for multi-asic
     timeout:               Subscription duration in seconds; After X seconds, request terminates; default none
     """
     env = GNMIEnvironment(duthost, GNMIEnvironment.TELEMETRY_MODE)
-    cmdFormat = 'python ' + gnxi_path + 'gnmi_cli_py/py_gnmicli.py -g -t {0} -p {1} -m {2} -x {3} -xt {4} -o {5}'
-    cmd = cmdFormat.format(duthost.mgmt_ip, env.gnmi_port, method, xpath, target, "ndastreamingservertest")
+    ns = ""
+    if namespace is not None:
+        ns = "/{}".format(namespace)
+    cmdFormat = 'python ' + gnxi_path + 'gnmi_cli_py/py_gnmicli.py -g -t {0} -p {1} -m {2} -x {3} -xt {4}{5} -o {6}'
+    cmd = cmdFormat.format(duthost.mgmt_ip, env.gnmi_port, method, xpath, target, ns, "ndastreamingservertest")
 
     if method == METHOD_SUBSCRIBE:
         cmd += " --subscribe_mode {0} --submode {1} --interval {2} --update_count {3} --create_connections {4}".format(

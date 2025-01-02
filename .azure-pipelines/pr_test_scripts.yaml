@@ -228,6 +228,7 @@ multi-asic-t1-lag:
   - bgp/test_bgp_bbr.py
   - bgp/test_bgp_fact.py
   - bgp/test_bgp_update_timer.py
+  - route/test_route_perf.py
   - snmp/test_snmp_default_route.py
   - snmp/test_snmp_link_local_ip.py
   - snmp/test_snmp_loopback.py
@@ -246,6 +247,8 @@ multi-asic-t1-lag:
   - process_monitoring/test_critical_process_monitoring.py
   - container_checker/test_container_checker.py
   - http/test_http_copy.py
+  - telemetry/test_telemetry_cert_rotation.py
+  - telemetry/test_telemetry.py
 
 t2:
   - test_vs_chassis_setup.py

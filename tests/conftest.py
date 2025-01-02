@@ -33,7 +33,6 @@ from tests.common.devices.duthosts import DutHosts
 from tests.common.devices.vmhost import VMHost
 from tests.common.devices.base import NeighborDevice
 from tests.common.devices.cisco import CiscoHost
-from tests.common.helpers.parallel import parallel_run
 from tests.common.fixtures.duthost_utils import backup_and_restore_config_db_session    # noqa F401
 from tests.common.fixtures.ptfhost_utils import ptf_portmap_file                        # noqa F401
 from tests.common.fixtures.ptfhost_utils import ptf_test_port_map_active_active         # noqa F401
@@ -47,7 +46,6 @@ from tests.common.helpers.custom_msg_utils import add_custom_msg
 from tests.common.helpers.dut_ports import encode_dut_port_name
 from tests.common.helpers.dut_utils import encode_dut_and_container_name
 from tests.common.helpers.parallel_utils import InitialCheckState, InitialCheckStatus
-from tests.common.plugins.sanity_check import recover_chassis
 from tests.common.system_utils import docker
 from tests.common.testbed import TestbedInfo
 from tests.common.utilities import get_inventory_files
@@ -63,6 +61,8 @@ from tests.common.config_reload import config_reload
 from tests.common.connections.console_host import ConsoleHost
 from tests.common.helpers.assertions import pytest_assert as pt_assert
 from tests.common.helpers.inventory_utils import trim_inventory
+from tests.common.plugins.ptfadapter.dummy_testutils import DummyTestUtils
+from tests.common.helpers.multi_thread_utils import SafeThreadPoolExecutor
 
 try:
     from tests.macsec import MacsecPluginT2, MacsecPluginT0
@@ -488,6 +488,8 @@ def rand_one_dut_hostname(request):
     """
     """
     global rand_one_dut_hostname_var
+    if rand_one_dut_hostname_var is None:
+        set_rand_one_dut_hostname(request)
     return rand_one_dut_hostname_var
 
 
@@ -502,6 +504,8 @@ def rand_selected_dut(duthosts, rand_one_dut_hostname):
 @pytest.fixture(scope="module")
 def selected_rand_dut(request):
     global rand_one_dut_hostname_var
+    if rand_one_dut_hostname_var is None:
+        set_rand_one_dut_hostname(request)
     return rand_one_dut_hostname_var
 
 
@@ -977,6 +981,21 @@ def pytest_runtest_makereport(item, call):
     # be "setup", "call", "teardown"
 
     setattr(item, "rep_" + rep.when, rep)
+
+
+# This function is a pytest hook implementation that is called in runtest call stage.
+# We are using this hook to set ptf.testutils to DummyTestUtils if the test is marked with "skip_traffic_test",
+# DummyTestUtils would always return True for all verify function in ptf.testutils.
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_call(item):
+    if "skip_traffic_test" in item.keywords:
+        logger.info("Got skip_traffic_test marker, will skip traffic test")
+        with DummyTestUtils():
+            logger.info("Set ptf.testutils to DummyTestUtils to skip traffic test")
+            yield
+            logger.info("Reset ptf.testutils")
+    else:
+        yield
 
 
 def collect_techsupport_on_dut(request, a_dut):
@@ -1478,7 +1497,7 @@ def generate_dut_backend_asics(request, duts_selected):
     return dut_asic_list
 
 
-def generate_priority_lists(request, prio_scope, with_completeness_level=False):
+def generate_priority_lists(request, prio_scope, with_completeness_level=False, one_dut_only=False):
     empty = []
 
     tbname = request.config.getoption("--testbed")
@@ -1504,6 +1523,9 @@ def generate_priority_lists(request, prio_scope, with_completeness_level=False):
         for p in priorities:
             ret.append('{}|{}'.format(dut, p))
 
+        if one_dut_only:
+            break
+
     if with_completeness_level:
         completeness_level = get_completeness_level_metadata(request)
         # if completeness_level in ["debug", "basic", "confident"],
@@ -1511,7 +1533,7 @@ def generate_priority_lists(request, prio_scope, with_completeness_level=False):
         # if completeness_level in ["debug"], only select one item
         # if completeness_level in ["basic", "confident"], select 1 priority per DUT
 
-        if completeness_level in ["debug"]:
+        if completeness_level in ["debug"] and ret:
             ret = random.sample(ret, 1)
         elif completeness_level in ["basic", "confident"]:
             ret = []
@@ -1519,6 +1541,9 @@ def generate_priority_lists(request, prio_scope, with_completeness_level=False):
                 if priorities:
                     p = random.choice(priorities)
                     ret.append('{}|{}'.format(dut, p))
+
+                if one_dut_only:
+                    break
 
     return ret if ret else empty
 
@@ -1664,12 +1689,6 @@ def pytest_generate_tests(metafunc):        # noqa E302
     if dut_fixture_name and "selected_dut" in metafunc.fixturenames:
         metafunc.parametrize("selected_dut", duts_selected, scope="module", indirect=True)
 
-    # When rand_one_dut_hostname used and select a dut for test, initialize rand_one_dut_hostname_var
-    # rand_one_dut_hostname and rand_selected_dut will use this variable for setup test case
-    # selected_rand_dut will use this variable for setup TACACS
-    if "rand_one_dut_hostname" in metafunc.fixturenames:
-        set_rand_one_dut_hostname(metafunc)
-
     if "enum_dut_portname" in metafunc.fixturenames:
         metafunc.parametrize("enum_dut_portname", generate_port_lists(metafunc, "all_ports"))
 
@@ -1719,14 +1738,28 @@ def pytest_generate_tests(metafunc):        # noqa E302
         metafunc.parametrize("enum_dut_all_prio", generate_priority_lists(metafunc, 'all'))
     if 'enum_dut_lossless_prio' in metafunc.fixturenames:
         metafunc.parametrize("enum_dut_lossless_prio", generate_priority_lists(metafunc, 'lossless'))
+    if 'enum_one_dut_lossless_prio' in metafunc.fixturenames:
+        metafunc.parametrize("enum_one_dut_lossless_prio",
+                             generate_priority_lists(metafunc, 'lossless', one_dut_only=True))
     if 'enum_dut_lossless_prio_with_completeness_level' in metafunc.fixturenames:
         metafunc.parametrize("enum_dut_lossless_prio_with_completeness_level",
                              generate_priority_lists(metafunc, 'lossless', with_completeness_level=True))
+    if 'enum_one_dut_lossless_prio_with_completeness_level' in metafunc.fixturenames:
+        metafunc.parametrize("enum_one_dut_lossless_prio_with_completeness_level",
+                             generate_priority_lists(metafunc, 'lossless', with_completeness_level=True,
+                                                     one_dut_only=True))
     if 'enum_dut_lossy_prio' in metafunc.fixturenames:
         metafunc.parametrize("enum_dut_lossy_prio", generate_priority_lists(metafunc, 'lossy'))
+    if 'enum_one_dut_lossy_prio' in metafunc.fixturenames:
+        metafunc.parametrize("enum_one_dut_lossy_prio", generate_priority_lists(metafunc, 'lossy',
+                                                                                one_dut_only=True))
     if 'enum_dut_lossy_prio_with_completeness_level' in metafunc.fixturenames:
         metafunc.parametrize("enum_dut_lossy_prio_with_completeness_level",
                              generate_priority_lists(metafunc, 'lossy', with_completeness_level=True))
+    if 'enum_one_dut_lossy_prio_with_completeness_level' in metafunc.fixturenames:
+        metafunc.parametrize("enum_one_dut_lossy_prio_with_completeness_level",
+                             generate_priority_lists(metafunc, 'lossy', with_completeness_level=True,
+                                                     one_dut_only=True))
     if 'enum_pfc_pause_delay_test_params' in metafunc.fixturenames:
         metafunc.parametrize("enum_pfc_pause_delay_test_params", pfc_pause_delay_test_params(metafunc))
 
@@ -1838,6 +1871,30 @@ def enum_dut_feature(request):
 @pytest.fixture(scope="module")
 def enum_rand_one_frontend_asic_index(request):
     return request.param
+
+
+@pytest.fixture(scope='module')
+def enum_upstream_dut_hostname(duthosts, tbinfo):
+    if tbinfo["topo"]["type"] == "m0":
+        upstream_nbr_type = "M1"
+    elif tbinfo["topo"]["type"] == "mx":
+        upstream_nbr_type = "M0"
+    elif tbinfo["topo"]["type"] == "t0":
+        upstream_nbr_type = "T1"
+    elif tbinfo["topo"]["type"] == "t1":
+        upstream_nbr_type = "T2"
+    else:
+        upstream_nbr_type = "T3"
+
+    for a_dut in duthosts.frontend_nodes:
+        minigraph_facts = a_dut.get_extended_minigraph_facts(tbinfo)
+        minigraph_neighbors = minigraph_facts['minigraph_neighbors']
+        for key, value in minigraph_neighbors.items():
+            if upstream_nbr_type in value['name']:
+                return a_dut.hostname
+
+    pytest.fail("Did not find a dut in duthosts that for topo type {} that has upstream nbr type {}".
+                format(tbinfo["topo"]["type"], upstream_nbr_type))
 
 
 @pytest.fixture(scope="module")
@@ -2298,24 +2355,27 @@ def collect_db_dump(request, duthosts):
         collect_db_dump_on_duts(request, duthosts)
 
 
-def __dut_reload(duts_data, node=None, results=None):
-    if node is None or results is None:
-        logger.error('Missing kwarg "node" or "results"')
-        return
-    logger.info("dut reload called on {}".format(node.hostname))
-    node.copy(content=json.dumps(duts_data[node.hostname]["pre_running_config"][None], indent=4),
-              dest='/etc/sonic/config_db.json', verbose=False)
+def restore_config_db_and_config_reload(duts_data, duthosts):
+    # First copy the pre_running_config to the config_db.json files
+    for duthost in duthosts:
+        logger.info("dut reload called on {}".format(duthost.hostname))
+        duthost.copy(content=json.dumps(duts_data[duthost.hostname]["pre_running_config"][None], indent=4),
+                     dest='/etc/sonic/config_db.json', verbose=False)
 
-    if node.is_multi_asic:
-        for asic_index in range(0, node.facts.get('num_asic')):
-            asic_ns = "asic{}".format(asic_index)
-            asic_cfg_file = "/tmp/{}_config_db{}.json".format(node.hostname, asic_index)
-            with open(asic_cfg_file, "w") as outfile:
-                outfile.write(json.dumps(duts_data[node.hostname]['pre_running_config'][asic_ns], indent=4))
-            node.copy(src=asic_cfg_file, dest='/etc/sonic/config_db{}.json'.format(asic_index), verbose=False)
-            os.remove(asic_cfg_file)
+        if duthost.is_multi_asic:
+            for asic_index in range(0, duthost.facts.get('num_asic')):
+                asic_ns = "asic{}".format(asic_index)
+                asic_cfg_file = "/tmp/{}_config_db{}.json".format(duthost.hostname, asic_index)
+                with open(asic_cfg_file, "w") as outfile:
+                    outfile.write(json.dumps(duts_data[duthost.hostname]['pre_running_config'][asic_ns], indent=4))
+                duthost.copy(src=asic_cfg_file, dest='/etc/sonic/config_db{}.json'.format(asic_index), verbose=False)
+                os.remove(asic_cfg_file)
 
-    config_reload(node, wait_before_force_reload=300, safe_reload=True, check_intf_up_ports=True)
+    # Second execute config reload on all duthosts
+    with SafeThreadPoolExecutor(max_workers=8) as executor:
+        for duthost in duthosts:
+            executor.submit(config_reload, duthost, wait_before_force_reload=300, safe_reload=True,
+                            check_intf_up_ports=True, wait_for_bgp=True)
 
 
 def compare_running_config(pre_running_config, cur_running_config):
@@ -2608,12 +2668,7 @@ def core_dump_and_config_check(duthosts, tbinfo, request,
                 logger.warning("Core dump or config check failed for {}, results: {}"
                                .format(module_name, json.dumps(check_result)))
 
-                is_modular_chassis = duthosts[0].get_facts().get("modular_chassis")
-                if is_modular_chassis:
-                    recover_chassis(duthosts)
-                else:
-                    results = parallel_run(__dut_reload, (), {"duts_data": duts_data}, duthosts, timeout=360)
-                    logger.debug('Results of dut reload: {}'.format(json.dumps(dict(results))))
+                restore_config_db_and_config_reload(duts_data, duthosts)
             else:
                 logger.info("Core dump and config check passed for {}".format(module_name))
         if check_result:
