@@ -43,6 +43,10 @@ Options:
     - option-name: path
       description: to figure out the path of topo_{}.yml
       required: False
+
+    - option-name: selected_route_set
+      description: the set of routes to be announced or withdrawn
+      required: False
 '''
 
 EXAMPLES = '''
@@ -117,7 +121,7 @@ def wait_for_http(host_ip, http_port, timeout=10):
 
 def get_topo_type(topo_name):
     pattern = re.compile(
-        r'^(t0-mclag|t0|t1|ptf|fullmesh|dualtor|t2|mgmttor|m0|mc0|mx|dpu)')
+        r'^(t0-mclag|t0|t1|ptf|fullmesh|dualtor|t2|mgmttor|m0|mc0|mx|dpu|smartswitch-t1)')
     match = pattern.match(topo_name)
     if not match:
         return "unsupported"
@@ -875,7 +879,7 @@ We would have the following distribution:
 """
 
 
-def fib_t2_lag(topo, ptf_ip, action="announce"):
+def fib_t2_lag(topo, ptf_ip, action="announce", selected_route_set='all'):
     route_set = []
     vms = topo['topology']['VMs']
     # T1 VMs per linecard(asic) - key is the dut index, and value is a list of T1 VMs
@@ -895,8 +899,10 @@ def fib_t2_lag(topo, ptf_ip, action="announce"):
             if dut_index not in t3_vms:
                 t3_vms[dut_index] = list()
             t3_vms[dut_index].append(key)
-    route_set += generate_t2_routes(t1_vms, topo, ptf_ip, action)
-    route_set += generate_t2_routes(t3_vms, topo, ptf_ip, action)
+    if selected_route_set in ('all', 't1'):
+        route_set += generate_t2_routes(t1_vms, topo, ptf_ip, action)
+    if selected_route_set in ('all', 't3'):
+        route_set += generate_t2_routes(t3_vms, topo, ptf_ip, action)
     send_routes_in_parallel(route_set)
 
 
@@ -1040,6 +1046,8 @@ def main():
             ptf_ip=dict(required=True, type='str'),
             action=dict(required=False, type='str',
                         default='announce', choices=["announce", "withdraw"]),
+            selected_route_set=dict(required=False, type='str',
+                                    default='all', choices=['all', 't1', 't3']),
             path=dict(required=False, type='str', default=''),
             log_path=dict(required=False, type='str', default='')
         ),
@@ -1053,6 +1061,9 @@ def main():
     action = module.params['action']
     path = module.params['path']
 
+    if module.params['selected_route_set']:
+        selected_route_set = module.params['selected_route_set']
+
     topo = read_topo(topo_name, path)
     if not topo:
         module.fail_json(msg='Unable to load topology "{}"'.format(topo_name))
@@ -1065,12 +1076,12 @@ def main():
         if topo_type == "t0":
             fib_t0(topo, ptf_ip, no_default_route=is_storage_backend, action=action)
             module.exit_json(changed=True)
-        elif topo_type == "t1":
+        elif topo_type == "t1" or topo_type == "smartswitch-t1":
             fib_t1_lag(
                 topo, ptf_ip, no_default_route=is_storage_backend, action=action)
             module.exit_json(changed=True)
         elif topo_type == "t2":
-            fib_t2_lag(topo, ptf_ip, action=action)
+            fib_t2_lag(topo, ptf_ip, action=action, selected_route_set=selected_route_set)
             module.exit_json(changed=True)
         elif topo_type == "t0-mclag":
             fib_t0_mclag(topo, ptf_ip, action=action)
