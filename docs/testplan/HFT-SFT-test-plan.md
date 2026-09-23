@@ -283,9 +283,29 @@ message and that nothing is left behind in CONFIG_DB.
 | 2 | Unknown group type | `--group_type FOO` |
 | 3 | Non-existent object | `--object_names Ethernet9999` |
 | 4 | Counter invalid for the object type | `PORT` group with `WATERMARK_BYTES` |
-| 5 | Zero polling interval | `--poll_interval 0` |
-| 6 | Polling interval below the counter minimum | `--poll_interval 1` |
-| 7 | Invalid stream state | `--stream_state on` |
+| 5 | Polling interval below the counter minimum | `--poll_interval 1` |
+| 6 | Invalid stream state | `--stream_state on` |
+
+> A `poll_interval` of `0` is **not** an invalid value. It means "unset", and the session
+> runs at the SAI default interval. Test Case #10 covers it.
+
+---
+
+### Test Case #10: test_zero_poll_interval_uses_default
+
+**Objective**: Verify that `poll_interval 0` is accepted and runs at the SAI default
+interval of 1 ms, so the session is classified as HFT.
+
+**Test Steps**:
+1. **Configure** - create a `PORT` profile with `--poll_interval 0` and a group with native
+   `READ` counters. Enable it.
+2. **Assert accepted** - the command succeeds and CONFIG_DB stores `poll_interval` `0`.
+3. **Assert the attribute is omitted** - the session's TAM report in ASIC_DB carries no
+   `SAI_TAM_REPORT_ATTR_REPORT_INTERVAL`. SAI applies its own 1 ms default rather than
+   receiving an explicit value.
+4. **Assert HFT** - SAI logs the session as classified HFT.
+5. **Assert cadence** - points arrive every 1 ms within tolerance.
+6. **Cleanup** - delete the group and the profile.
 
 ---
 
